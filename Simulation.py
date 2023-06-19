@@ -247,3 +247,41 @@ def plot_systems(min_sys, nonmin_sys, ylim=[0, 2]):
 plot_systems(det_min, det_nonmin)
 plot_systems(stoch_min, stoch_nonmin)
 plot_systems(sde_min, sde_nonmin,ylim = [-2,2])
+
+
+# %% step changes
+u_max = 10
+
+def plot_response(sys, ylim=[0, 100]):
+
+    fig = plt.figure(figsize=(12, 6))
+    ax = plt.gca()
+    ax.set_prop_cycle(nord_theme)
+    plt.plot(sys.t, np.transpose(sys.out), linestyle='-')
+    plt.ylim(ylim)
+    plt.legend(['Tank 1', 'Tank 2', 'Tank 3', 'Tank 4', ])
+
+
+step_10 = simulation_system(Params_base_min,
+                            u = lambda t: 0.1*u_max*np.array([1, 1]).reshape(2, 1),
+                            d = lambda t: np.array([np.sin(t) + 1, np.cos(t) + 1]).reshape(2, 1),
+                            obs_noise=lambda t: stats.norm(scale=1).rvs(4))
+step_25 = simulation_system(Params_base_min,
+                            u = lambda t: 0.25*u_max*np.array([1, 1]).reshape(2, 1),
+                            d = lambda t: np.array([np.sin(t) + 1, np.cos(t) + 1]).reshape(2, 1),
+                            obs_noise=lambda t: stats.norm(scale=1).rvs(4))
+step_50 = simulation_system(Params_base_min,
+                            u = lambda t: 0.5*u_max*np.array([1, 1]).reshape(2, 1),
+                            d = lambda t: np.array([np.sin(t) + 1, np.cos(t) + 1]).reshape(2, 1),
+                            obs_noise=lambda t: stats.norm(scale=1).rvs(4))
+
+x0 = np.array([0, 0, 0, 0])
+tspan = [0, 600]
+
+step_10.run_sim(tspan, x0)
+step_25.run_sim(tspan, x0)
+step_50.run_sim(tspan, x0)
+#%%
+plot_response(step_10,[0,10])
+plot_response(step_25,[0,30])
+plot_response(step_50,[0,50])
