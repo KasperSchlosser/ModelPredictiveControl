@@ -8,144 +8,188 @@ The Stochatstic system:
 The stochastic system:
     dx = A sqrt(x(t)) + G u(t) + D d(t) dWt, where dWt is the weiner process
 """
-#%%
+# %%
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.integrate as integrate
 import scipy.stats as stats
-import copy
+
 
 from types import SimpleNamespace
+from cycler import cycler
 
+nord_colors = ['#BF616A', '#D08770', '#EBCB8B', '#A3BE8C']
+nord_theme = cycler(color = nord_colors)
 
-#%% functions
+# %% functions
 
 # noise generator for model 2
-def stochastic_noise_gen(dt, rate):
+def stochastic_noise_gen(dt, rate, seed = 42):
     noise = dict()
+    rng = np.random.RandomState(seed)
 
+    eta = stats.expon(scale=1/rate)
     def stochastic_noise(t):
-        k = np.floor(t % dt)
+        k = np.floor(t / dt)
         if not k in noise:
-            noise[k] = stats.expon(scale = 1/rate).rvs(2).reshape(2,1)
+            noise[k] = eta.rvs(2, random_state=rng).reshape(2, 1)
         return noise[k]
     return stochastic_noise
 
 # system generator
 # maybe implement as a class?
 # would also be nice to run simulation in same class
-def deterministic_gen(params):
-    g = params.g
-    gamma_1, gamma_2 = params.gamma_1, params.gamma_2
-    A_1, A_2, A_3, A_4 = params.A_1, params.A_2, params.A_3, params.A_4
-    a_1, a_2, a_3, a_4 = params.a_1, params.a_2, params.a_3, params.a_4
-    rho = params.rho
 
-    u = params.u
-    d = params.d
 
-    obs_noise = params.obs_noise
+class simulation_system:
 
-    A = np.array([[-np.sqrt(2*g*rho*a_1**2 / A_1), 0, np.sqrt(2*g*rho*a_3**2 / A_3), 0],
-                    [0, -np.sqrt(2*g*rho*a_2**2 / A_2), 0, np.sqrt(2*g*rho*a_4**2 / A_4)],
-                    [0, 0, -np.sqrt(2*g*rho*a_3**2 / A_3), 0],
-                    [0, 0, 0, -np.sqrt(2*g*rho*a_4**2 / A_4)]])
+    def __init__(self, params, u, d, obs_noise):
+
+        # set parameters of the system
+        for k, v in params.items():
+            setattr(self, k, v)
+
+        # define matrices
+
+        self.A = np.array([[-np.sqrt(2*self.g*self.rho*self.a_1**2 / self.A_1), 0, np.sqrt(2*self.g*self.rho*self.a_3**2 / self.A_3), 0],
+                           [0, -np.sqrt(2*self.g*self.rho*self.a_2**2 / self.A_2),
+                            0, np.sqrt(2*self.g*self.rho*self.a_4**2 / self.A_4)],
+                           [0, 0, -np.sqrt(2*self.g*self.rho *
+                                           self.a_3**2 / self.A_3), 0],
+                           [0, 0, 0, -np.sqrt(2*self.g*self.rho*self.a_4**2 / self.A_4)]])
+        self.Gamma = np.array([[self.gamma_1, 0],
+                               [0, self.gamma_2],
+                               [0, 1-self.gamma_2],
+                               [1-self.gamma_1, 0]])
+        self.D = np.array([[0, 0],
+                           [0, 0],
+                           [1, 0],
+                           [0, 1]])
+        self.G = self.g*np.array([[1, 0, 0, 0],
+                                  [0, 1, 0, 0],
+                                  [0, 0, 1, 0],
+                                  [0, 0, 0, 1]])
+        self.C = np.array([[1/(self.rho * self.A_1), 0, 0, 0],
+                           [0, 1/(self.rho * self.A_2), 0, 0],
+                           [0, 0, 1/(self.rho * self.A_3), 0],
+                           [0, 0, 0, 1/(self.rho * self.A_4)]])
+
+        # set noise and inputs
+        self.u = u
+        self.d = d
+        self.obs_noise = obs_noise
+
+    def system_eq(self, t, x):
+        return self.A @ np.nan_to_num(np.sqrt(x)) + self.Gamma @ self.u(t) + self.D @ self.d(t)
+
+    def observation_eq(self, t, x):
+        return self.G @ x + self.obs_noise(t)
+
+    def output_eq(self, t, x):
+        return self.C @ x
+
+    def run_sim(self, t_span, x0):
+        self.sim = integrate.solve_ivp(
+            self.system_eq, t_span, x0,
+            solver='RK45',
+            vectorized=True,
+            max_step=0.1)
+        # make observations
+        self.obs = np.zeros(self.sim.y.shape)
+        for i in range(len(self.sim.t)):
+            self.obs[:,i] = self.observation_eq(self.sim.t[i], self.sim.y[:,i])
+        # make outputs
+        self.out = np.zeros(self.sim.y.shape)
+        for i in range(len(self.sim.t)):
+            self.out[:,i] = self.output_eq(self.sim.t[i], self.sim.y[:,i])
+
+        # assign t, and y for ease of plotting
+        self.t = self.sim.t
+        self.y = self.sim.y
         
-    Gamma = np.array([[gamma_1, 0],
-                    [0, gamma_2],
-                    [0, 1-gamma_2],
-                    [1-gamma_1, 0]])
-    
-    D = np.array([[0, 0],
-                [0, 0],
-                [1, 0],
-                [0, 1]])
-    G = g*np.array([[1,0,0,0],
-                [0,1,0,0],
-                [0,0,1,0],
-                [0,0,0,1]])
-    C = np.array([[1/(rho * A_1),0,0,0],
-                    [0,1/(rho * A_2),0,0],
-                    [0,0,1/(rho * A_3),0],
-                    [0,0,0,1/(rho * A_4)]])
+# %%
+Params_base_min = {
+    "gamma_1": 0.58,  # split 1
+    "gamma_2": 0.68,  # split 2
+    "A_1": 1e-2,  # Area tank 1
+    "A_2": 2e-2,  # Area tank 2
+    "A_3": 3e-2,  # Area tank 3
+    "A_4": 4e-2,  # Area tank 4
+    "a_1": 2e-4,  # Area hole 1
+    "a_2": 2.5e-4,  # Area hole 2
+    "a_3": 3e-4,  # Area hole 3
+    "a_4": 3.5e-4,  # Area hole 4
+    "g": 9.8,  # gravity 9.8 m/s^2
+    "rho": 1000,  # density 1000 kg/m^3
+}
 
-    def system_eq(t, x):
-        return A @ np.nan_to_num(np.sqrt(x)) + Gamma @ u(t) + D @ d(t)
-    
-    def observation_eq(t, x):
-        return G @ x + obs_noise(t)
-    
-    def output_eq(t, x):
-        return C @ x
+Params_base_nonmin = {
+    "gamma_1": 0.58,  # split 1
+    "gamma_2": 0.68,  # split 2
+    "A_1": 1e-2,  # Area tank 1
+    "A_2": 2e-2,  # Area tank 2
+    "A_3": 3e-2,  # Area tank 3
+    "A_4": 4e-2,  # Area tank 4
+    "a_1": 2e-4,  # Area hole 1
+    "a_2": 2.5e-4,  # Area hole 2
+    "a_3": 3e-4,  # Area hole 3
+    "a_4": 0,  # Area hole 4
+    "g": 9.8,  # gravity 9.8 m/s^2
+    "rho": 1000,  # density 1000 kg/m^3
+}
 
-    return system_eq, observation_eq, output_eq
+# %% make systems
+det_min = simulation_system(Params_base_min,
+                            u=lambda t: np.array([0, 0]).reshape(2, 1),
+                            d=lambda t: np.array(
+                                [np.sin(t) + 1, np.cos(t) + 1]).reshape(2, 1),
+                            obs_noise= lambda t: np.array([0, 0, 0, 0]))
+det_nonmin = simulation_system(Params_base_nonmin,
+                               u=lambda t: np.array([0, 0]).reshape(2, 1),
+                               d=lambda t: np.array(
+                                   [np.sin(t) + 1, np.cos(t) + 1]).reshape(2,  1),
+                               obs_noise = lambda t: np.array([0, 0, 0, 0]))
+stoch_min = simulation_system(Params_base_min,
+                               u=lambda t: np.array([0, 0]).reshape(2, 1),
+                               d=stochastic_noise_gen(10, 1),
+                               obs_noise=lambda t: stats.norm(scale=1).rvs(4))
+stoch_nonmin = simulation_system(Params_base_nonmin,
+                               u=lambda t: np.array([0, 0]).reshape(2, 1),
+                               d=stochastic_noise_gen(10, 1),
+                               obs_noise=lambda t: stats.norm(scale=1).rvs(4))
 
 
-#%%
+#%% run and plot simulations
 
-Params_base = SimpleNamespace(**{
-    "gamma_1" : 0.58, # split 1
-    "gamma_2" : 0.68, # split 2
-    "A_1" : 1e-2, #Area tank 1
-    "A_2" : 2e-2, #Area tank 2
-    "A_3" : 3e-2, #Area tank 3
-    "A_4" : 4e-2, #Area tank 4
-    "a_1" : 2e-4, # Area hole 1
-    "a_2" : 2.5e-4, # Area hole 2
-    "a_3" : 3e-4, # Area hole 3
-    "a_4" : 3.5e-4, # Area hole 4
-    "g" : 9.8, # gravity 9.8 m/s^2
-    "rho" : 1000, # density 1000 kg/m^3
-})
-
-# Deterministic system
-params_det_min = copy.deepcopy(Params_base)
-
-params_det_min.u =  lambda t: np.array([0,0]).reshape(2,1),
-params_det_min.d =  lambda t: 2 * np.array([np.sin(t)**2, np.cos(t)**2]).reshape(2,1)
-params_det_min.obs_noise = lambda t: np.array([0,0]).reshape(2,1)
-#"d" : lambda t: np.array([1,1]).reshape(2,1)
-
-params_det_nonmin = copy.deepcopy(Params_base)
-params_det_nonmin.a_4 = 0 
-params_det_nonmin.u =  lambda t: np.array([0,0]).reshape(2,1),
-params_det_nonmin.d =  lambda t: 2 * np.array([np.sin(t)**2, np.cos(t)**2]).reshape(2,1)
-params_det_nonmin.obs_noise = lambda t: np.array([0,0]).reshape(2,1)
-#"d" : lambda t: np.array([1,1]).reshape(2,1)
-
-# Stochastic system
-params_stoch_min = copy.deepcopy(Params_base)
-params_stoch_min.u =  lambda t: np.array([0,0]).reshape(2,1)
-params_stoch_min.d =  lambda t: stochastic_noise_gen(1, 1)
-params_stoch_min.obs_noise = lambda t: stats.norm(scale = 1).rvs(2).reshape(2,1)
-
-params_stoch_nonmin = copy.deepcopy(Params_base)
-params_stoch_nonmin.a_4 = 0
-params_stoch_nonmin.u =  lambda t: np.array([0,0]).reshape(2,1)
-params_stoch_nonmin.d =  stochastic_noise_gen(1, 1)
-params_stoch_nonmin.obs_noise = lambda t: stats.norm(scale = 1).rvs(2).reshape(2,1)
+x0 = np.array([0, 0, 0, 0])
+tspan = [0, 200]
+det_min.run_sim(tspan, x0)
+det_nonmin.run_sim(tspan, x0)
+stoch_min.run_sim(tspan, x0)
+stoch_nonmin.run_sim(tspan, x0)
 
 
 
-#%%
-minimum_phase = deterministic_gen(params_minimum)
-non_minimum_phase = deterministic_gen(params_non_minimum)
+# tmp function to reuse plottin, without copy paste
+def plot_systems(min_sys, nonmin_sys, ylim = [0,2]):
 
-#print(non_minimum_phase(0, np.array([1,1,1,1]).reshape(4,1)))
-sol = integrate.solve_ivp(non_minimum_phase,
-                          [0, 200],
-                          np.array([0,0,0,0]),
-                          method = "LSODA",
-                          vectorized=True)
+    fig = plt.figure(figsize=(12, 6))
+    ax = plt.gca()
+    ax.set_prop_cycle(nord_theme)
+    plt.plot(min_sys.t, np.transpose(min_sys.out) , linestyle='-')
+    plt.plot(nonmin_sys.t, np.transpose(nonmin_sys.out), linestyle='--')
+    plt.plot(0, 0, linestyle='-', color = 'k', label = 'minimum system')
+    plt.plot(0, 0, linestyle='--', color = 'k', label = 'non-minimum system')
+    plt.ylim(ylim)
+    legend_elements = [plt.Line2D([0], [0], color = nord_colors[0], label = 'Tank 1'),
+                    plt.Line2D([0], [0], color = nord_colors[1], label = 'Tank 2'),
+                    plt.Line2D([0], [0], color = nord_colors[2], label = 'Tank 3'),
+                    plt.Line2D([0], [0], color = nord_colors[3], label = 'Tank 4'),
+                    plt.Line2D([0], [0], color = 'k', linestyle = '-', label = 'Minimum system'),
+                    plt.Line2D([0], [0], color = 'k', linestyle = '--', label = 'Non-minimum system')]
+    plt.legend(handles = legend_elements)
 
-C = np.array([[1/(params_minimum.rho * params_minimum.A_1),0,0,0],
-                    [0,1/(params_minimum.rho * params_minimum.A_2),0,0],
-                    [0,0,1/(params_minimum.rho * params_minimum.A_3),0],
-                    [0,0,0,1/(params_minimum.rho * params_minimum.A_4)]])
-fig = plt.figure(figsize = (14,8))
-plt.plot(sol.t, np.transpose(C @ sol.y))
-plt.legend(["Tank 1", "Tank 2", "Tank 3", "Tank 4"])
-plt.savefig("4tank.png")
-
+plot_systems(det_min, det_nonmin)
+plot_systems(stoch_min, stoch_nonmin)
 
 # %%
