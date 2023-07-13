@@ -13,13 +13,19 @@ import numpy as np
 import matplotlib.pyplot as plt
 import scipy.integrate as integrate
 import scipy.stats as stats
+import numpy.fft as fft
+import tfest
 
 
 from types import SimpleNamespace
 from cycler import cycler
+from scipy.optimize import root
+from collections import defaultdict
+
 
 nord_colors = ['#BF616A', '#D08770', '#EBCB8B', '#A3BE8C']
 nord_theme = cycler(color=nord_colors)
+
 
 # %% functions
 
@@ -145,6 +151,28 @@ class SDE_system(simulation_system):
         self.obs = obs
         self.out = out
 
+# for plotting the systems, not general
+def plot_systems(min_sys, nonmin_sys, ylim=[0, 2]):
+
+    fig = plt.figure(figsize=(12, 6))
+    ax = plt.gca()
+    ax.set_prop_cycle(nord_theme)
+    plt.plot(min_sys.t, np.transpose(min_sys.out), linestyle='-')
+    plt.plot(nonmin_sys.t, np.transpose(nonmin_sys.out), linestyle='--')
+    plt.plot(0, 0, linestyle='-', color='k', label='minimum system')
+    plt.plot(0, 0, linestyle='--', color='k', label='non-minimum system')
+    plt.ylim(ylim)
+    legend_elements = [plt.Line2D([0], [0], color=nord_colors[0], label='Tank 1'),
+                       plt.Line2D([0], [0], color=nord_colors[1],
+                                  label='Tank 2'),
+                       plt.Line2D([0], [0], color=nord_colors[2],
+                                  label='Tank 3'),
+                       plt.Line2D([0], [0], color=nord_colors[3],
+                                  label='Tank 4'),
+                       plt.Line2D([0], [0], color='k',
+                                  linestyle='-', label='Minimum system'),
+                       plt.Line2D([0], [0], color='k', linestyle='--', label='Non-minimum system')]
+    plt.legend(handles=legend_elements)
 
 # %%
 Params_base_min = {
@@ -177,17 +205,20 @@ Params_base_nonmin = {
     "rho": 1000,  # density 1000 kg/m^3
 }
 
+#det_noise = lambda t: np.array([np.sin(2*np.pi*t / 100) + 1, np.cos(10*np.pi * t / 100) + 1]).reshape(2, 1)
+det_noise = lambda t: np.array([1,1]).reshape(2, 1)
+det_obs_noise = lambda t: np.array([0, 0, 0, 0])
+
+
 # %% make systems
 det_min = simulation_system(Params_base_min,
                             u=lambda t: np.array([0, 0]).reshape(2, 1),
-                            d=lambda t: np.array(
-                                [np.sin(t) + 1, np.cos(t) + 1]).reshape(2, 1),
-                            obs_noise=lambda t: np.array([0, 0, 0, 0]))
+                            d = det_noise,
+                            obs_noise = det_obs_noise,)
 det_nonmin = simulation_system(Params_base_nonmin,
                                u=lambda t: np.array([0, 0]).reshape(2, 1),
-                               d=lambda t: np.array(
-                                   [np.sin(t) + 1, np.cos(t) + 1]).reshape(2,  1),
-                               obs_noise=lambda t: np.array([0, 0, 0, 0]))
+                               d = det_noise,
+                               obs_noise = det_obs_noise)
 stoch_min = simulation_system(Params_base_min,
                               u=lambda t: np.array([0, 0]).reshape(2, 1),
                               d=stochastic_noise_gen(10, 1),
@@ -211,77 +242,124 @@ sde_nonmin = SDE_system(Params_base_nonmin,
 
 x0 = np.array([0, 0, 0, 0])
 tspan = [0, 600]
+
 det_min.run_sim(tspan, x0)
 det_nonmin.run_sim(tspan, x0)
 stoch_min.run_sim(tspan, x0)
 stoch_nonmin.run_sim(tspan, x0)
-#%%
 sde_min.run_sim(tspan, x0, dt = 0.1)
 sde_nonmin.run_sim(tspan, x0, dt = 0.1)
 
-
-# tmp function to reuse plottin, without copy paste
-def plot_systems(min_sys, nonmin_sys, ylim=[0, 2]):
-
-    fig = plt.figure(figsize=(12, 6))
-    ax = plt.gca()
-    ax.set_prop_cycle(nord_theme)
-    plt.plot(min_sys.t, np.transpose(min_sys.out), linestyle='-')
-    plt.plot(nonmin_sys.t, np.transpose(nonmin_sys.out), linestyle='--')
-    plt.plot(0, 0, linestyle='-', color='k', label='minimum system')
-    plt.plot(0, 0, linestyle='--', color='k', label='non-minimum system')
-    plt.ylim(ylim)
-    legend_elements = [plt.Line2D([0], [0], color=nord_colors[0], label='Tank 1'),
-                       plt.Line2D([0], [0], color=nord_colors[1],
-                                  label='Tank 2'),
-                       plt.Line2D([0], [0], color=nord_colors[2],
-                                  label='Tank 3'),
-                       plt.Line2D([0], [0], color=nord_colors[3],
-                                  label='Tank 4'),
-                       plt.Line2D([0], [0], color='k',
-                                  linestyle='-', label='Minimum system'),
-                       plt.Line2D([0], [0], color='k', linestyle='--', label='Non-minimum system')]
-    plt.legend(handles=legend_elements)
-
-#%%
+# plot systems and save figures
 plot_systems(det_min, det_nonmin)
+plt.savefig('Figures/Simulation/deterministic.png')
+
 plot_systems(stoch_min, stoch_nonmin)
+plt.savefig('Figures/Simulation/stochastic.png')
+
 plot_systems(sde_min, sde_nonmin,ylim = [-2,2])
+plt.savefig('Figures/Simulation/sde.png')
+
+#%% step responses
+# we just start the simulation around the steady values
+x0 = det_min.y[:,-1]
+tspan = [0, 1000]
+
+#make step functions
+
+def step_func(step_size):
+    step = defaultdict(lambda : np.array([0.0,0.0]).reshape(2,1))
+    for x in np.arange(10 ,600.1, 10):
+        step[x] = step[x-10] + ((np.random.rand(2,1) > 0.5) * 2 - 1) * step_size
+        step[x] = np.clip(step[x], 0, np.inf)
+    return lambda x: step[np.round(x,-1)], step
 
 
-# %% step changes
-u_max = 10
+#def step_func(step_size, step_time = 200):
+#        return lambda t: np.ones([2,1]) * step_size if t > step_time else np.zeros([2,1])
 
-def plot_response(sys, ylim=[0, 100]):
+u_10, step_10 = step_func(0.1)
+u_25, step_25 = step_func(0.25)
+u_50, step_50 = step_func(0.5)
 
-    fig = plt.figure(figsize=(12, 6))
-    ax = plt.gca()
-    ax.set_prop_cycle(nord_theme)
-    plt.plot(sys.t, np.transpose(sys.out), linestyle='-')
-    plt.ylim(ylim)
-    plt.legend(['Tank 1', 'Tank 2', 'Tank 3', 'Tank 4', ])
+"""
+u_10 = step_func(0.1)
+u_25 = step_func(0.25)
+u_50 = step_func(0.5)
+"""
+# %% Deterministic step response
+det_step_10 = simulation_system(Params_base_min,
+                                #u=lambda t: np.array([0, 0]).reshape(2, 1),
+                                u = u_10,
+                                d = det_noise,
+                                obs_noise = det_obs_noise)
+det_step_25 = simulation_system(Params_base_min,
+                                #u=lambda t: np.array([0, 0]).reshape(2, 1),
+                                u = u_25,
+                                d = det_noise,
+                                obs_noise = det_obs_noise)
+det_step_50 = simulation_system(Params_base_min,
+                                #u=lambda t: np.array([0, 0]).reshape(2, 1),
+                                u = u_50,
+                                d = det_noise,
+                                obs_noise = det_obs_noise)
 
+#stochastoch step respone
+stoch_step_10 = simulation_system(  Params_base_min,
+                                    u = u_10,
+                                    d = stochastic_noise_gen(10, 1),
+                                    obs_noise = lambda t: stats.norm(scale=1).rvs(4))
+stoch_step_25 = simulation_system(  Params_base_min,
+                                    u = u_25,
+                                    d = stochastic_noise_gen(10, 1),
+                                    obs_noise = lambda t: stats.norm(scale=1).rvs(4))
+stoch_step_50 = simulation_system(  Params_base_min,
+                                    u = u_50,
+                                    d = stochastic_noise_gen(10, 1),
+                                    obs_noise = lambda t: stats.norm(scale=1).rvs(4))
+                                  
+# %%
 
-step_10 = simulation_system(Params_base_min,
-                            u = lambda t: 0.1*u_max*np.array([1, 1]).reshape(2, 1),
-                            d = lambda t: np.array([np.sin(t) + 1, np.cos(t) + 1]).reshape(2, 1),
-                            obs_noise=lambda t: stats.norm(scale=1).rvs(4))
-step_25 = simulation_system(Params_base_min,
-                            u = lambda t: 0.25*u_max*np.array([1, 1]).reshape(2, 1),
-                            d = lambda t: np.array([np.sin(t) + 1, np.cos(t) + 1]).reshape(2, 1),
-                            obs_noise=lambda t: stats.norm(scale=1).rvs(4))
-step_50 = simulation_system(Params_base_min,
-                            u = lambda t: 0.5*u_max*np.array([1, 1]).reshape(2, 1),
-                            d = lambda t: np.array([np.sin(t) + 1, np.cos(t) + 1]).reshape(2, 1),
-                            obs_noise=lambda t: stats.norm(scale=1).rvs(4))
+def step_response(sim, x0, tspan, u, step_size):
+    sim.run_sim(tspan, x0)
 
-x0 = np.array([0, 0, 0, 0])
-tspan = [0, 600]
+    fig, axes = plt.subplots(2,1)
+    axes[0].set_prop_cycle(nord_theme)
+    axes[1].set_prop_cycle(nord_theme)
+    axes[0].plot(sim.t, np.transpose(sim.out) / step_size)
+    axes[1].plot(sim.t, np.array([u(x) for x in sim.t]).squeeze())
+    axes[0].legend(["Tank 1", "Tank 2", "Tank 3", "Tank 4"])
+    axes[1].legend(["F1", "F2"])
+    axes[0].set_ylabel("Normalised output")
+    axes[1].set_ylabel("Flow (kg/s)")
 
-step_10.run_sim(tspan, x0)
-step_25.run_sim(tspan, x0)
-step_50.run_sim(tspan, x0)
+    spectra = fft.fft(sim.out)
+    freq = fft.fftfreq(sim.out.shape[-1])
+    plt.figure()
+    plt.plot(freq, np.transpose(np.abs(spectra)))
+
+# %%
+step_response(det_step_10, x0, tspan, u_10, 0.1)
+step_response(det_step_25, x0, tspan, u_25, 0.25)
+step_response(det_step_50, x0, tspan, u_50, 0.5)
+
 #%%
-plot_response(step_10,[0,10])
-plot_response(step_25,[0,30])
-plot_response(step_50,[0,50])
+step_response(stoch_step_10, x0, tspan, u_10, 0.1)
+step_response(stoch_step_25, x0, tspan, u_25, 0.25)
+step_response(stoch_step_50, x0, tspan, u_50, 0.5)
+
+
+#%%
+
+te1 = tfest.tfest(np.array([u_10(x) for x in det_step_10.t])[:,0].squeeze(),
+                  det_step_10.out[0,:])
+te2 = tfest.tfest(np.array([u_25(x) for x in det_step_25.t])[:,0].squeeze(),
+                  det_step_25.out[0,:])
+te3 = tfest.tfest(np.array([u_50(x) for x in det_step_50.t])[:,0].squeeze(),
+                  det_step_50.out[0,:])
+
+
+te1.estimate(2,3,time = tspan[-1], l1= 1)
+te2.estimate(2,3,time = tspan[-1], l1= 1)
+te3.estimate(2,3,time = tspan[-1], l1= 1)
+# %%
