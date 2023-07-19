@@ -1,6 +1,5 @@
+#%%
 import numpy as np
-import scipy.integrate as integrate
-import scipy.stats as stats
 import scipy.signal as sig
 import numpy.fft as fft
 
@@ -13,65 +12,14 @@ from functions import *
 nord_colors = ['#BF616A', '#D08770', '#EBCB8B', '#A3BE8C']
 nord_theme = cycler(color=nord_colors)
 
-#%% step responses
-# we just start the simulation around the steady values
-x0 = np.array([12.75510122 16.32652775 17.00680245 16.65972493])
-tspan = [0, 1000]
-
-#make step functions
-
+# %%
+#function to make step functions
 def step_func(step_size):
     step = defaultdict(lambda : np.array([0.0,0.0]).reshape(2,1))
     for x in np.arange(10 ,600.1, 10):
         step[x] = step[x-10] + ((np.random.rand(2,1) > 0.5) * 2 - 1) * step_size
         step[x] = np.clip(step[x], 0, np.inf)
     return lambda x: step[np.round(x,-1)], step
-
-
-#def step_func(step_size, step_time = 200):
-#        return lambda t: np.ones([2,1]) * step_size if t > step_time else np.zeros([2,1])
-
-u_10, step_10 = step_func(0.1)
-u_25, step_25 = step_func(0.25)
-u_50, step_50 = step_func(0.5)
-
-"""
-u_10 = step_func(0.1)
-u_25 = step_func(0.25)
-u_50 = step_func(0.5)
-"""
-# %% Deterministic step response
-det_step_10 = simulation_system(Params_base_min,
-                                #u=lambda t: np.array([0, 0]).reshape(2, 1),
-                                u = u_10,
-                                d = det_noise,
-                                obs_noise = det_obs_noise)
-det_step_25 = simulation_system(Params_base_min,
-                                #u=lambda t: np.array([0, 0]).reshape(2, 1),
-                                u = u_25,
-                                d = det_noise,
-                                obs_noise = det_obs_noise)
-det_step_50 = simulation_system(Params_base_min,
-                                #u=lambda t: np.array([0, 0]).reshape(2, 1),
-                                u = u_50,
-                                d = det_noise,
-                                obs_noise = det_obs_noise)
-
-#stochastoch step respone
-stoch_step_10 = simulation_system(  Params_base_min,
-                                    u = u_10,
-                                    d = stochastic_noise_gen(10, 1),
-                                    obs_noise = lambda t: stats.norm(scale=1).rvs(4))
-stoch_step_25 = simulation_system(  Params_base_min,
-                                    u = u_25,
-                                    d = stochastic_noise_gen(10, 1),
-                                    obs_noise = lambda t: stats.norm(scale=1).rvs(4))
-stoch_step_50 = simulation_system(  Params_base_min,
-                                    u = u_50,
-                                    d = stochastic_noise_gen(10, 1),
-                                    obs_noise = lambda t: stats.norm(scale=1).rvs(4))
-
-# %%
 
 def transfer_function_H(y,u, dt):
     U = fft.fft(u, axis = 0)
@@ -82,8 +30,6 @@ def transfer_function_H(y,u, dt):
     U = U[U_nonzero,:]
     Y = Y[U_nonzero]
     freq = freq[U_nonzero]
-
-
 
     H =  Y[:,np.newaxis] / U
 
@@ -116,39 +62,54 @@ def estimate_transfer(H, freq, nzeros, npoles, ninputs, x0 = None, l1 = 0):
 
     return systems, res
 
-det_step_10.run_sim([0,1000],x0)
-det_step_25.run_sim([0,1000],x0)
-det_step_50.run_sim([0,1000],x0)
+#%%
+#simulation parameters
+#start at roughly steady state
+x0 = np.array([12.75510122, 16.32652775, 17.00680245, 16.65972493])
+tspan = [0, 100]
 
-TF = [0,0,0,0]
+#steps to use
+steps = [0.1, 0.25, 0.5]
+us = [step_func(step)[0] for step in steps]
+
+# time step to discretize to
+Ts = 0.1
+
+
+#create systems
+
+det_systems = [simulation_system(Params_base_min, u, det_noise, det_obs_noise) for u in us]
+stoch_systems = [simulation_system(Params_base_min, u, stoch_noise, stoch_obs_noise) for u in us]
+
+#run systems
+for sys in det_systems:
+    sys.run_sim(tspan, x0)
+for sys in stoch_systems:
+    sys.run_sim(tspan, x0)
+
+#%% estimate transfer functions
+TF = [None, None, None, None]
 for i in range(4):
+    Hs = []
+    freqs = []
+    for j, sys in enumerate(det_systems):
+        dt = sys.t[-1] - sys.t[-2]
+        u_vals = np.array([us[j](t) for t in sys.t]).squeeze()
+        H, freq = transfer_function_H(sys.out[i], u_vals, dt)
+        Hs.append(H)
+        freqs.append(freq)
     
-    u_vals_10 = np.array([u_10(t) for t in det_step_10.t]).squeeze()
-    u_vals_25 = np.array([u_25(t) for t in det_step_25.t]).squeeze()
-    u_vals_50 = np.array([u_50(t) for t in det_step_50.t]).squeeze()
 
-    H_10, freq10 = transfer_function_H(det_step_10.y[0], u_vals_10, det_step_10.t[1] - det_step_10.t[0])
-    H_25, freq25 = transfer_function_H(det_step_25.y[0], u_vals_25, det_step_25.t[1] - det_step_25.t[0])
-    H_50, freq50 = transfer_function_H(det_step_50.y[0], u_vals_50, det_step_50.t[1] - det_step_50.t[0])
-
-    H = np.concatenate([H_10, H_25, H_50])
-    freq = np.concatenate([freq10,freq25,freq50])
+    Hs = np.concatenate(Hs)
+    freqs = np.concatenate(freqs)
 
     TF[i] = estimate_transfer(H,freq, 1,1, ninputs = 2, l1 = 1)[0]
-
 #%% print system
-Ts = 0.1
 
 
 def imp_response(A_d, B_d, C_d, D_d, n):
     if n == 0: return D_d
     else: return C_d @ A_d ** (n-1) @ B_d
-
-for i in range(4):
-    print(TF[i])
-    plt.figure()
-    for s in TF[i]:
-        dis
 
 
 # %% Linearization of systems
