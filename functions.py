@@ -3,6 +3,7 @@ import scipy.integrate as integrate
 import scipy.stats as stats
 import scipy.signal as sig
 import numpy.fft as fft
+import cvxopt
 
 from cycler import cycler
 from scipy.optimize import minimize
@@ -165,6 +166,32 @@ def estimate_transfer(H, freq, nzeros, npoles, x0 = None, l1 = 0):
     system = sig.lti(res.x[:nzeros+1], res.x[nzeros+1:])
 
     return system, res
+
+def qpsolve(H,g,l,u,A,bl,bu, xinit):
+    #Solve the program
+    # min 1/2 x' H x + g' x
+    # st.   l < x < u
+    #       bl < A x < ul
+    n = H.shape[0]
+    m = A.shape[0]
+    G1 = np.array([
+        [np.indentity(n), np.zeros([n,n])],
+        [np.zeros[n,n], -np.identity(n)]
+        ])
+
+    G2 = np.array([
+        [A, np.zeros(A.shape)],
+        [np.zeros(A.shape), -A]
+    ])
+
+    G = np.array([
+        [G1, np.zeros([G1.shape[0], G2.shape[1]])],
+        [np.zeros([G2.shape[0], G1.shape[1]]), G2]
+        ])
+    
+    b = np.vstack((u, -l, bu, -bl ))
+
+    return cvxopt.solvers.qp(H, g, G, b)
 
 # %% parameters
 Params_base_min = {
