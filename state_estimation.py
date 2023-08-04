@@ -52,7 +52,7 @@ class kalmanfilter:
                                 )[0]
             self.P_pred = self.A @ self.P_est @ self.A.T + self.Sigma_noise
             self.P_obs = self.C @ self.P_pred @ self.C.T + self.Sigma_obs
-            self.K = self.P_pred @ self.C.T @ np.linalg.inv(self.P_obs)
+            self.K = self.P_pred @ self.C.T @ np.linalg.pinv(self.P_obs)
         else:
             # dynamic filter precalculate convariances and kalman gain
             self.dynamic = True
@@ -67,7 +67,7 @@ class kalmanfilter:
             for i in range(1,N-1):
                 self.P_pred[i] = self.A @ self.P_est[i] @ self.A.T + self.Sigma_noise
                 self.P_obs[i] = self.C @ self.P_pred[i] @ self.C.T + self.Sigma_obs
-                self.K[i] = self.P_pred[i] @ self.C.T @ np.linalg.inv(self.P_obs[i])
+                self.K[i] = self.P_pred[i] @ self.C.T @ np.linalg.pinv(self.P_obs[i])
                 self.P_est[i+1] = (np.identity(self.nstates) - self.K[i] @ self.C) @ self.P_pred[i]
 
         #filter
@@ -88,7 +88,7 @@ class kalmanfilter:
 
 
 
-# %% test
+# %% taken from step experiment 
 
 N = 10000
 TS = 0.1
